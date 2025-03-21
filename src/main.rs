@@ -1,21 +1,14 @@
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn main() {
-    let mode = std::env::args().nth(1);
-    match mode {
-        Some(mode) => match mode.as_str() {
-            "client" => client(),
-            "server" => server(),
-            mode => println!(
-                "ERROR: Please specify either 'client' or 'server' (received '{}')",
-                mode
-            ),
-        },
-        None => println!("ERROR: Please specify either 'client' or 'server'"),
-    }
+    let server = thread::spawn(server);
+    let client = thread::spawn(client);
+  
+    server.join().unwrap();
+    client.join().unwrap();
 }
 
 // hostname and port for the server to bind to
@@ -25,17 +18,20 @@ const HOST: &str = "localhost:3333";
 const TOTAL_BYTES: usize = 1_000_000;
 
 fn client() {
-    // test with a raw TCP stream
-    client_inner("TcpStream (Read)", TcpStream::connect(HOST).unwrap());
-
-    // test with the stream wrapped in a buffered reader
-    client_inner(
-        "BufReader<TcpStream> (BufRead)",
-        BufReader::new(TcpStream::connect(HOST).unwrap()),
-    );
+    // connect to server
+    let mut stream = loop {
+        match TcpStream::connect(HOST) {
+            Ok(stream) => break stream,
+            Err(_)     => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    
+    // run tests
+    client_inner("TcpStream (Read)", &mut stream);
+    client_inner("BufReader<TcpStream> (BufRead)", &mut BufReader::new(stream));
 }
 
-fn client_inner<TRead: Read>(description: &str, mut stream: TRead) {
+fn client_inner<TRead: Read>(description: &str, stream: &mut TRead) {
     let mut index = 0;
 
     // create a large buffer to hold all incoming data
@@ -70,19 +66,16 @@ fn client_inner<TRead: Read>(description: &str, mut stream: TRead) {
 }
 
 fn server() {
-    let listener = TcpListener::bind(HOST).unwrap();
-    println!("Listening started, ready to accept");
+    // create a large set of data [0, 1, .., 255, 0, 1, ..]
+    let data: Vec<u8> = (0..TOTAL_BYTES).map(|n| (n % 255) as u8).collect();
 
     // listen for incoming connections
-    for stream in listener.incoming() {
-        thread::spawn(move || {
-            // create a large set of data [0, 1, .., 255, 0, 1, ..]
-            let data: Vec<u8> = (0..TOTAL_BYTES).map(|n| (n % 255) as u8).collect();
+    let listener = TcpListener::bind(HOST).unwrap();
+    let mut stream = match listener.accept() {
+        Ok((stream, _)) => stream,
+        Err(_) => todo!(),
+    };
 
-            // write entire set of data
-            stream.unwrap().write(&data).unwrap();
-
-            println!("Data sent, closing connection");
-        });
-    }
+    let _ = stream.write(&data).unwrap();
+    let _ = stream.write(&data).unwrap();
 }
